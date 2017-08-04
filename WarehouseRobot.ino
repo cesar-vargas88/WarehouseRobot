@@ -30,7 +30,7 @@ float fD          = 0;
 float fKP         = 12;
 float fKI         = 0.25;
 float fKD         = 10;
-int   nSpeed      = 250;
+int   nSpeed      = 127;
 
 void setup() 
 {
@@ -123,24 +123,23 @@ void loop()
   Serial.print(bSensor[2]);
   Serial.print(bSensor[3]);
   Serial.print(bSensor[4]);
-  Serial.print("   ");
-  Serial.print("fP:");
-  Serial.print(fP);
-  Serial.print("  fI:");
-  Serial.print(fI);
-  Serial.print("  fD:");
-  Serial.print(fD);
-  Serial.print("  fPID:");
-  Serial.print(fPID);
-  Serial.print("  fLast_I:");
-  Serial.print(fLast_I);
-  Serial.print("  fError:");
+  Serial.print("  Error:");
   Serial.print(fError);
-  Serial.print("  fLast_Error:");
+  Serial.print("  LastError:");
   Serial.print(fLast_Error);
+  Serial.print("  P:");
+  Serial.print(fP);
+  Serial.print("  I:");
+  Serial.print(fI);
+  Serial.print("  D:");
+  Serial.print(fD);
+  Serial.print("  PID:");
+  Serial.print(fPID);
+  Serial.print("  Last_I:");
+  Serial.print(fLast_I);
   Serial.print("  KP:");
   Serial.print(fKP);
-  Serial.print("  fP:");
+  Serial.print("  P:");
   Serial.print(fP);
   Serial.print("  KI:");
   Serial.print(fKI);
@@ -148,11 +147,10 @@ void loop()
   Serial.print(fI);
   Serial.print("  KD:");
   Serial.print(fKD);
-  Serial.print("  fD:");
+  Serial.print("  D:");
   Serial.println(fD);
   
   delay(500);
-  
 }
 
   /*Serial.print("fP: ");

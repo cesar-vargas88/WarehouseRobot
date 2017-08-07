@@ -1,10 +1,37 @@
 
 #include <Arduino_FreeRTOS.h>
+#include <SPI.h>
+#include <RFID.h>
 #include "Car4W.h"
 #include "TCRT5000.h"
 #include "MotorCD.h"
 
-void TaskLineFollower(void *pvParameters);
+////////////////////////////
+//  RFID object instance  //
+////////////////////////////
+
+/*
+PINOUT:
+RC522 MODULE    Uno/Nano     MEGA
+SDA             D10          D9
+SCK             D13          D52
+MOSI            D11          D51
+MISO            D12          D50
+IRQ             N/A          N/A
+GND             GND          GND
+RST             D9           D8
+3.3V            3.3V         3.3V
+*/
+
+/* Define the DIO used for the SDA (SS) and RST (reset) pins. */
+#define SDA_DIO   9
+#define RESET_DIO 8
+
+RFID RC522(SDA_DIO, RESET_DIO); 
+
+//////////////////////////////////
+//  TCRT5000 objects instances  //
+//////////////////////////////////
 
 TCRT5000 Sensor1(31);
 TCRT5000 Sensor2(29);
@@ -12,49 +39,64 @@ TCRT5000 Sensor3(27);
 TCRT5000 Sensor4(25);
 TCRT5000 Sensor5(23);               
 
-MotorCD MotorFrontLeft  ( 4 ,  3 ,  2);   // Object for Motor Front Left
-MotorCD MotorFrontRight ( 6 ,  5 ,  7);   // Object for Motor Front Right 
-MotorCD MotorRearLeft   (10 ,  9 ,  8);   // Object for Motor Rear Left
-MotorCD MotorRearRight  (12 , 11 , 13);   // Object for Motor Rear Right
+//////////////////////////////////////
+//  Car4WWarehouse object instance  //
+//////////////////////////////////////
 
-int nSpeedMotorFrontLeft  = 0;
-int nSpeedMotorRearLeft   = 0;
-int nSpeedMotorFrontRight = 0;
-int nSpeedMotorRearRight  = 0;
+Car4W Car4WWarehouse( 26 , 24 , 22 ,       // Motor Front Left
+                      30 , 28 , 32 ,       // Motor Front Right
+                       4 ,  3 ,  2 ,       // Motor Rear Left 
+                       6 ,  5 ,  7 );      // Motor Rear Right
 
-bool  bSensor[5]  = {false, false, false, false, false};
-int nSpeed = 255;
+////////////////////////////////
+//  Car4WWarehouse Varibles   //
+////////////////////////////////
+
+int SpeedMotorFrontLeft  = 0;
+int SpeedMotorRearLeft   = 0;
+int SpeedMotorFrontRight = 0;
+int SpeedMotorRearRight  = 0;
+
+bool bSensor[5] = {false, false, false, false, false};
+
+////////////////////////////////
+//  Car4WWarehouse Constants  //
+////////////////////////////////
+
+const unsigned char Speed = 255;
 
 //////////////////////
-//  Variables PID   //
+//  PID Variables   //
 //////////////////////
 
-int SamplingTime = 1;        // tiempo de muestreo Se encuentra en milisegundos
-unsigned long Past = 0;       // tiempo Past (Se hace para asegurar tiempo de muestreo)
-unsigned long Now;
-float Ref = 0;                  // referencia 
-double Y = 0;                   // Salida
-double Error;                   // Error
-double SumError = 0;           // Suma del Error para la parte integral
-double LastError = 0;            // Error anterior para la derivada
-double DerivateError = 0;
+double Error          = 0;
+double LastError      = 0;
+double IntegralError  = 0;
+double DerivateError  = 0;
 
-double U = 0;                   // Señal control
+double P = 0;                  
+double I = 0;                    
+double D = 0;
+double U = 0;                   
 
-int TimeChange = 0;
+//////////////////////
+//  PID Constants   //
+//////////////////////
 
-float P = 0;                    // control proporcional
-float I = 0;                    // control Integral
-float D = 0;
-      
-// constantes del controlador 
-float Kp = 40;
-float Ki = 4;
-float Kd = 40;
+const unsigned char SamplingTime = 1;
+const unsigned char Kp = 60.0;
+const unsigned char Ki =  1.0;
+const unsigned char Kd = 50.0;
+
+//////////////////////////
+//  Define RTOS Tasks   //
+//////////////////////////
+
+void TaskLineFollower(void *pvParameters);
+void TaskRFIDReader(void *pvParameters);
 
 void setup() 
 {  
-  // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
   
   while (!Serial) 
@@ -62,24 +104,46 @@ void setup()
     ; // wait for serial port to connect. Needed for native USB, on LEONARDO, MICRO, YUN, and other 32u4 based boards.
   }
 
+  //////////////////
+  //  RFID setup  //
+  //////////////////
+
+  SPI.begin(); 
+  RC522.init();
+  
+  //////////////////////////////
+  //  TCRT5000 objects setup  //
+  //////////////////////////////
+  
   Sensor1.Setup();
   Sensor2.Setup();
   Sensor3.Setup();
   Sensor4.Setup();
   Sensor5.Setup();
 
-  MotorFrontLeft.Setup();     
-  MotorFrontRight.Setup();    
-  MotorRearLeft.Setup();      
-  MotorRearRight.Setup();     
+  ///////////////////////////////////
+  //  Car4WWarehouse object setup  //
+  ///////////////////////////////////
 
-  xTaskCreate(
-    TaskLineFollower
-    ,  (const portCHAR *) "LineFollower"
-    ,  128  // Stack size
-    ,  NULL
-    ,  1  // Priority
-    ,  NULL );
+  Car4WWarehouse.Setup();
+
+  //////////////////////////
+  //  Setup RTOS Tasks    //
+  //////////////////////////
+
+  xTaskCreate (  TaskLineFollower
+              ,  (const portCHAR *) "LineFollower"
+              ,  128                                // Stack size
+              ,  NULL
+              ,  1                                  // Priority
+              ,  NULL );
+
+  xTaskCreate (  TaskRFIDReader
+              ,  (const portCHAR *) "RFIDReader"
+              ,  128                                // Stack size
+              ,  NULL
+              ,  2                                  // Priority
+              ,  NULL );
 
   // Now the task scheduler, which takes over control of scheduling individual tasks, is automatically started.
 }
@@ -95,11 +159,19 @@ void TaskLineFollower(void *pvParameters)  // This is a task.
 
   for (;;)
   {
+    //////////////////////////
+    //  Get TCRT500 values  //
+    //////////////////////////
+    
     bSensor[0] = Sensor1.getDigitalValue();
     bSensor[1] = Sensor2.getDigitalValue();
     bSensor[2] = Sensor3.getDigitalValue();
     bSensor[3] = Sensor4.getDigitalValue();
     bSensor[4] = Sensor5.getDigitalValue();
+
+    ////////////////////////////////
+    //  Get line follower error   //
+    ////////////////////////////////
     
     if     ( (bSensor[0] == 0) && (bSensor[1] == 0) && (bSensor[2] == 0) && (bSensor[3] == 0) && (bSensor[4] == 1) )    Error =  4;
     else if( (bSensor[0] == 0) && (bSensor[1] == 0) && (bSensor[2] == 0) && (bSensor[3] == 1) && (bSensor[4] == 1) )    Error =  3;
@@ -110,59 +182,48 @@ void TaskLineFollower(void *pvParameters)  // This is a task.
     else if( (bSensor[0] == 0) && (bSensor[1] == 1) && (bSensor[2] == 0) && (bSensor[3] == 0) && (bSensor[4] == 0) )    Error = -2;
     else if( (bSensor[0] == 1) && (bSensor[1] == 1) && (bSensor[2] == 0) && (bSensor[3] == 0) && (bSensor[4] == 0) )    Error = -3;
     else if( (bSensor[0] == 1) && (bSensor[1] == 0) && (bSensor[2] == 0) && (bSensor[3] == 0) && (bSensor[4] == 0) )    Error = -4;
+
+    //////////////////////////
+    //  PID implementation  //
+    //////////////////////////
   
-    Now = millis();
-  
-    TimeChange = Now - Past;                        // Diferencia de tiempo actual- Past
+    IntegralError += (Error * SamplingTime);                  
+    DerivateError  = (Error - LastError) / SamplingTime;      
     
-    if(TimeChange >= SamplingTime)                    // si se supera el tiempo de muestreo
-    {
-      SumError = SumError + (Error * SamplingTime);   // Cálculo de aproximación del area
-      DerivateError    = (Error - LastError) / SamplingTime;    // Cálculo Error Derivativo 
+    LastError = Error;                                        
         
-      P = Kp * Error;                                     // Control Proporcional
-      I = Ki * SumError;                                 // Control Integral
-      D = Kd * DerivateError;                                    // Control Derivativo
+    P = Kp * Error;                                           
+    I = Ki * IntegralError;                                   
+    D = Kd * DerivateError;                                   
         
-      U = P + I + D;                                      // Señal de control
-        
-      Past = Now;                                     // actualizar tiempo
-      LastError = Error;                                   // actualizar el Error     
-    }  
-  
-    nSpeedMotorFrontLeft   = nSpeed - U;
-    nSpeedMotorRearLeft    = nSpeed - U;
-    nSpeedMotorFrontRight  = nSpeed + U;
-    nSpeedMotorRearRight   = nSpeed + U;
-  
-    if(nSpeedMotorFrontLeft   >  255)   nSpeedMotorFrontLeft  =  255;
-    if(nSpeedMotorFrontLeft   < -255)   nSpeedMotorFrontLeft  = -255;
-    if(nSpeedMotorRearLeft    >  255)   nSpeedMotorRearLeft   =  255;
-    if(nSpeedMotorRearLeft    < -255)   nSpeedMotorRearLeft   = -255;
-    if(nSpeedMotorFrontRight  >  255)   nSpeedMotorFrontRight =  255;
-    if(nSpeedMotorFrontRight  < -255)   nSpeedMotorFrontRight = -255;
-    if(nSpeedMotorRearRight   >  255)   nSpeedMotorRearRight  =  255;
-    if(nSpeedMotorRearRight   < -255)   nSpeedMotorRearRight  = -255;
-      
-    if(nSpeedMotorFrontLeft >= 0)   MotorFrontLeft.Forward(nSpeedMotorFrontLeft);
-    else                            MotorFrontLeft.Backward(-1*nSpeedMotorFrontLeft);       
-  
-    if(nSpeedMotorRearLeft >= 0)    MotorRearLeft.Forward(nSpeedMotorRearLeft);
-    else                            MotorRearLeft.Backward(-1*nSpeedMotorRearLeft);     
-  
-    if(nSpeedMotorFrontRight >= 0)  MotorFrontRight.Forward(nSpeedMotorFrontRight);
-    else                            MotorFrontRight.Backward(-1*nSpeedMotorFrontRight);     
-  
-    if(nSpeedMotorRearRight >= 0)   MotorRearRight.Forward(nSpeedMotorRearRight);
-    else                            MotorRearRight.Backward(-1*nSpeedMotorRearRight);     
-  
+    U = P + I + D;                                           
+
+    //////////////////////////////////////
+    //  Get PWM signal for each motor   //
+    //////////////////////////////////////
+    
+    SpeedMotorFrontLeft  = constrain(Speed - U , -255, 255);
+    SpeedMotorRearLeft   = constrain(Speed - U , -255, 255);
+    SpeedMotorFrontRight = constrain(Speed + U , -255, 255);
+    SpeedMotorRearRight  = constrain(Speed + U , -255, 255);
+
+    //////////////////////////////////////
+    //  Set PWM signal for each motor   //
+    //////////////////////////////////////
+
+    Car4WWarehouse.Forward(SpeedMotorFrontLeft, SpeedMotorFrontRight, SpeedMotorRearLeft, SpeedMotorRearRight);
+
+    ///////////////////////////////
+    //  Print values for debug   //
+    ///////////////////////////////
+/*
     Serial.print(bSensor[0]);
     Serial.print(bSensor[1]);
     Serial.print(bSensor[2]);
     Serial.print(bSensor[3]);
     Serial.print(bSensor[4]);
     Serial.print("  EP:");
-    Serial.print(SumError);
+    Serial.print(IntegralError);
     Serial.print("  ED:");
     Serial.print(DerivateError);
     Serial.print("  EA:");
@@ -176,15 +237,39 @@ void TaskLineFollower(void *pvParameters)  // This is a task.
     Serial.print("  U:");
     Serial.print(U);
     Serial.print("  MFL:");
-    Serial.print(nSpeedMotorFrontLeft);  
+    Serial.print(SpeedMotorFrontLeft);  
     Serial.print("  MRL:");
-    Serial.print(nSpeedMotorRearLeft);
+    Serial.print(SpeedMotorRearLeft);
     Serial.print("  MFR:");
-    Serial.print(nSpeedMotorFrontRight);
+    Serial.print(SpeedMotorFrontRight);
     Serial.print("  MRR:");
-    Serial.println(nSpeedMotorRearRight);
+    Serial.println(SpeedMotorRearRight);
+*/    
+    vTaskDelay(2);  // one tick delay (15ms) in between reads for stability
+  }
+}
+
+void TaskRFIDReader(void *pvParameters)  // This is a task.
+{
+  (void) pvParameters;
+
+  for (;;)
+  {
+    if (RC522.isCard())
+    {
+      RC522.readCardSerial();
+      Serial.print("Card detected: ");
+      
+      for(int i=0;i<5;i++)
+      {
+        //Serial.print(RC522.serNum[i],DEC);
+        Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format   
+        Serial.print(" "); 
+      }
+      Serial.println("");
+    }
     
-    vTaskDelay(1);  // one tick delay (15ms) in between reads for stability
+    vTaskDelay(5);  // one tick delay (15ms) in between reads for stability
   }
 }
 

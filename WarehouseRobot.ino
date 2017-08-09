@@ -1,10 +1,18 @@
 
 #include <Arduino_FreeRTOS.h>
 #include <SPI.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <RFID.h>
 #include "Car4W.h"
 #include "TCRT5000.h"
 #include "MotorCD.h"
+
+////////////////////////////
+//  LCD object instance  //
+////////////////////////////
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 ////////////////////////////
 //  RFID object instance  //
@@ -103,6 +111,13 @@ void setup()
   {
     ; // wait for serial port to connect. Needed for native USB, on LEONARDO, MICRO, YUN, and other 32u4 based boards.
   }
+
+  //////////////////
+  //  LCD setup  //
+  //////////////////
+  
+  lcd.begin();
+  lcd.backlight();
 
   //////////////////
   //  RFID setup  //
@@ -258,15 +273,21 @@ void TaskRFIDReader(void *pvParameters)  // This is a task.
     if (RC522.isCard())
     {
       RC522.readCardSerial();
-      Serial.print("Card detected: ");
+
+      lcd.clear();
+      lcd.setCursor(0, 0); 
+      lcd.print("RFID Tag detected: ");
+
+      lcd.setCursor(0, 1); 
       
       for(int i=0;i<5;i++)
       {
+        lcd.print(RC522.serNum[i],HEX);
+        lcd.print(" ");
         //Serial.print(RC522.serNum[i],DEC);
-        Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format   
-        Serial.print(" "); 
+        //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format   
+        //Serial.print(" "); 
       }
-      Serial.println("");
     }
     
     vTaskDelay(5);  // one tick delay (15ms) in between reads for stability
